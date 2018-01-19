@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:p="http://www.springframework.org/schema/p"
+       xmlns:mvc="http://www.springframework.org/schema/c"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+       http://www.springframework.org/schema/beans/spring-beans.xsd
+
+
+        http://www.springframework.org/schema/context
+         http://www.springframework.org/schema/context/spring-context.xsd">
+       <!-- 扫描类包，将标注Spring注解的类自动转化Bean，同时完成Bean的注入 -->
+       <context:annotation-config />
+       <context:component-scan base-package="com.kwxyzk.mvc.controller" />
+
+       <!-- 视图解析器 -->
+       <bean class="org.springframework.mobile.device.view.LiteDeviceDelegatingViewResolver">
+              <constructor-arg>
+                    <bean class="org.springframework.web.servlet.view.InternalResourceViewResolver"
+                          p:prefix="/jsp/"
+                          p:suffix=".jsp"
+                    />
+              </constructor-arg>
+              <property name="mobilePrefix" value="mobile"/>
+              <property name="enableFallback" value="true"/>
+       </bean>
+
+       <!-- 文件上传 -->
+       <bean id="multipartResolver"
+             class="org.springframework.web.multipart.commons.CommonsMultipartResolver"
+             p:maxUploadSize="20971520"
+       />
+
+       <!--拦截器 -->
+       <mvc:interceptors>
+              <!--<mvc:interceptor>
+                     <mvc:mapping path="/**"/>
+                     <bean class="com.ziyue.mvc.interceptor.SessionInterceptor"></bean>
+              </mvc:interceptor>-->
+              <bean class="org.springframework.mobile.device.DeviceResolverHandlerInterceptor" />
+              <bean class="org.springframework.mobile.device.site.SitePreferenceHandlerInterceptor" />
+       </mvc:interceptors>
+</beans>
