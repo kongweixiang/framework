@@ -2,6 +2,7 @@
 <beans xmlns="http://www.springframework.org/schema/beans"
        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
        xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:int-kafka="http://www.springframework.org/schema/c" xmlns:p="http://www.springframework.org/schema/p"
        xsi:schemaLocation="http://www.springframework.org/schema/beans
      http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
      http://www.springframework.org/schema/tx
@@ -16,13 +17,14 @@
     <bean id="consumerProperties" class="java.util.HashMap">
         <constructor-arg>
             <map>
-                <entry key="bootstrap.servers" value="10.0.1.72:9092,10.0.1.73:9092,10.0.1.74:9092,10.0.1.75:9092"/>
+                <entry key="bootstrap.servers" value="127.0.0.1:9092,127.0.0.1:9093,127.0.0.1:9094"/>
                 <entry key="group.id" value="0"/>
                 <entry key="enable.auto.commit" value="true"/>
                 <entry key="auto.commit.interval.ms" value="1000"/>
                 <entry key="session.timeout.ms" value="30000"/>
                 <entry key="key.deserializer" value="org.apache.kafka.common.serialization.StringDeserializer"/>
                 <entry key="value.deserializer" value="org.apache.kafka.common.serialization.StringDeserializer"/>
+                <entry key="pollTimeout" value="3"/>
             </map>
         </constructor-arg>
     </bean>
@@ -34,19 +36,6 @@
         </constructor-arg>
     </bean>
 
-    <!-- 实际执行消息消费的类 -->
-    <bean id="messageListernerConsumerService" class="com.kwxyzk.util.kafak.KafkaConsumerServer"/>
 
-    <!-- 消费者容器配置信息 -->
-    <bean id="containerProperties" class="org.springframework.kafka.listener.config.ContainerProperties">
-        <constructor-arg value="defaultTopic"/>
-        <property name="messageListener" ref="messageListernerConsumerService"/>
-        <property name="transactionManager" ref="kafkaTransactionManager"/><!--使用事务-->
-    </bean>
-    <!-- 创建messageListenerContainer bean，使用的时候，只需要注入这个bean -->
-    <bean id="messageListenerContainer" class="org.springframework.kafka.listener.KafkaMessageListenerContainer"
-          init-method="doStart">
-        <constructor-arg ref="consumerFactory"/>
-        <constructor-arg ref="containerProperties"/>
-    </bean>
+
 </beans>

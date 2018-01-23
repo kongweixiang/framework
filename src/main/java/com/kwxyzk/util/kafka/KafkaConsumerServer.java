@@ -1,4 +1,4 @@
-package com.kwxyzk.util.kafak;
+package com.kwxyzk.util.kafka;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;

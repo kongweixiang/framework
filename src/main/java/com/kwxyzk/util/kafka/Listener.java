@@ -1,10 +1,12 @@
-package com.kwxyzk.util.kafak;
+package com.kwxyzk.util.kafka;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.context.event.EventListener;
 import org.springframework.kafka.annotation.KafkaHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.annotation.PartitionOffset;
 import org.springframework.kafka.annotation.TopicPartition;
+import org.springframework.kafka.event.ListenerContainerIdleEvent;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
@@ -91,5 +93,17 @@ public class Listener {
             //TODO
         }
 
+    }
+
+    @KafkaListener(id = "qux", topics = "annotated")
+    public void listen4(@Payload String foo, Acknowledgment ack) {
+
+    }
+
+    ListenerContainerIdleEvent event;
+    @EventListener(condition = "event.listenerId.startsWith('qux-')")
+    public void eventHandler(ListenerContainerIdleEvent event) {
+//        this.event = event;
+//        eventLatch.countDown();
     }
 }

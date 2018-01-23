@@ -1,4 +1,4 @@
-package com.kwxyzk.util.kafak;
+package com.kwxyzk.util.kafka;
 
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.springframework.context.annotation.Bean;
@@ -16,7 +16,6 @@ import java.util.Map;
 @Configuration
 @EnableKafka
 public class KafkaConfig {
-
     @Bean
     KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<Integer, String>>
     kafkaListenerContainerFactory() {
