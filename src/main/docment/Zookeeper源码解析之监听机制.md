@@ -62,7 +62,7 @@ ZooKeeper 的 Watcher 不管在客户端还是在 ZooKeeper 服务器中都有�
     void process(WatchedEvent event);//执行watcher 监听实现，用户自定义事件在服务端是发送事件，客户端收到事件通知后执行用户自定义处理
   }  
 ```
-从Watcher中我们可以知道监听的三个主要信息，ZooKeeper的状态，事件类型和监听类型。在服务器端注册不使用户自定义的监听实现类(Zookeeper 的服务状态也通过监听机制监听，所以它也有自己的内部监听事件，这里我们只关注我们定义的)，客户端注册时保存的用户自定义的监听器。  
+从Watcher中我们可以知道监听的三个主要信息，ZooKeeper的状态，事件类型和监听类型。在服务器端注册通过客户端的不同连接分为NIOServerCnxn和NettyServerCnxn两个Watcher实现类，客户端注册时保存用户自定义的监听实现类。  
 不论在客户端还是在服务端，Watch都是通过监听管理器来管理和使用的，下面我们先看一下服务端的管理器的一些主要方法。
 ### 服务端的管理器 IWatchManager
 在 Zookeeper 服务端中同时存在两个IWatchManager管理器——WatchManager和WatchManagerOptimized，WatchManagerOptimized已经优化过的，WatchManager未经优化的，优化主要体现在对Watch的不同存储上。他们同时都是实现IWatchManager，下面我们先看IWatchManager主要提供了哪些服务：
@@ -237,7 +237,7 @@ public interface IWatchManager {
 
   }
 ```
-我们看到代码中WatcherOrBitSet记录已经触发的Watcher，它是通过位实现的，他有两种实现，一种是通过Set记录所有的Watcher，一种是通过BitSet是实现，每个Watcher占一个位
+我们看到代码中WatcherOrBitSet记录已经触发的Watcher，它是通过位实现的，他有两种实现，一种是通过Set记录所有的Watcher，一种是通过BitSet是实现
 ```java
 public class WatcherOrBitSet {
 
@@ -630,7 +630,7 @@ ZooKeeper 客户端也可以通过 getData()、exists() 和 getChildren() 三个
         return response.getData();
     }
 ```
-客户端使用 cnxn.submitRequest(h, request, response, wcb) 方法向服务器提交请求时携带这个注册，同时等待请求的返回。请求发送完成后会由客户端 SendThread 线程的 readResponse 方法负责接收来自服务端的响应，readResponse 方法的最后会调用finishPacket 方法，它会从 Packet 中取出对应的 Watcher 并注册到 ZKWatchManager 中去
+客户端使用 cnxn.submitRequest(h, request, response, wcb) 方法向服务器提交请求时携带这个Watcher，同时等待请求的返回。请求发送完成后会由客户端 SendThread 线程的 readResponse 方法负责接收来自服务端的响应，readResponse 方法的最后会调用finishPacket 方法，它会从 Packet 中取出对应的 Watcher 并注册到 ZKWatchManager 中去
 ```java
    class SendThread extends ZooKeeperThread {
 
@@ -696,26 +696,207 @@ watchRegistration.register方法就是把 WatchRegistration 子类里面的 Watc
 ```
 当使用ZooKeeper 使用 getData()、exists() 和 getChildren() 三个接口来向 ZooKeeper 服务器注册 Watcher 的时候，首先将此消息传递给服务端，传递成功后，服务端会通知客户端，然后客户端将该路径和Watcher对应关系存储起来备用。
 
-###服务端处理 Watcher
+###服务端处理 
+服务端收到客户端的 Watcher 注册请求后，将 Watcher 根据请求包装成NettyServerCnxn或NIOServerCnxn注册到服务 IWatchManager 管理器中,在Zookeeper服务端处理请求的最后一个请求处理器为`FinalRequestProcessor`,我们通过入口看一下如何注册客户端请求的监听
+```java
+    public void processRequest(Request request) {
+        //……
+        switch (request.type) {
+            case OpCode.getData: {
+                lastOp = "GETD";
+                GetDataRequest getDataRequest = new GetDataRequest();
+                ByteBufferInputStream.byteBuffer2Record(request.request, getDataRequest);
+                path = getDataRequest.getPath();
+                rsp = handleGetDataRequest(getDataRequest, cnxn, request.authInfo);//处理请求
+                requestPathMetricsCollector.registerRequest(request.type, path);
+                break;
+            }        
+        }
+        //……
+    }
+   private Record handleGetDataRequest(Record request, ServerCnxn cnxn, List<Id> authInfo) throws KeeperException, IOException {
+        GetDataRequest getDataRequest = (GetDataRequest) request;
+        String path = getDataRequest.getPath();
+        DataNode n = zks.getZKDatabase().getNode(path);
+        if (n == null) {
+            throw new KeeperException.NoNodeException();
+        }
+        zks.checkACL(cnxn, zks.getZKDatabase().aclForNode(n), ZooDefs.Perms.READ, authInfo, path, null);
+        Stat stat = new Stat();
+        //ZKDatabase获取数据并添加Watcher    
+        byte[] b = zks.getZKDatabase().getData(path, stat, getDataRequest.getWatch() ? cnxn : null);
+        return new GetDataResponse(b, stat);
+    }
 
+    public byte[] getData(String path, Stat stat, Watcher watcher) throws KeeperException.NoNodeException {
+        DataNode n = nodes.get(path);
+        byte[] data = null;
+        if (n == null) {
+            throw new KeeperException.NoNodeException();
+        }
+        synchronized (n) {
+            n.copyStat(stat);
+            if (watcher != null) {
+                dataWatches.addWatch(path, watcher);//IWatchManager添加Watcher
+            }
+            data = n.data;
+        }
+        updateReadStat(path, data == null ? 0 : data.length);
+        return data;
+    }
+``` 
+上边就是我们在注册请求时的添加过程，服务端注册`IWatchManager.Watcher()`我们在讲监听管理器就说过了，这里不再多说，下边我们看一下请求怎么触发监听，我们直接看`DataTree`中
+```java
+    public Stat setData(String path, byte[] data, int version, long zxid, long time) throws KeeperException.NoNodeException {
+            Stat s = new Stat();
+            DataNode n = nodes.get(path);
+            if (n == null) {
+                throw new KeeperException.NoNodeException();
+            }
+            byte[] lastdata = null;
+            synchronized (n) {
+                lastdata = n.data;
+                nodes.preChange(path, n);
+                n.data = data;
+                n.stat.setMtime(time);
+                n.stat.setMzxid(zxid);
+                n.stat.setVersion(version);
+                n.copyStat(s);
+                nodes.postChange(path, n);
+            }
+            String lastPrefix = getMaxPrefixWithQuota(path);
+            long dataBytes = data == null ? 0 : data.length;
+            if (lastPrefix != null) {
+                this.updateCountBytes(lastPrefix, dataBytes - (lastdata == null ? 0 : lastdata.length), 0);
+            }
+            nodeDataSize.addAndGet(getNodeSize(path, data) - getNodeSize(path, lastdata));
+    
+            updateWriteStat(path, dataBytes);
+            dataWatches.triggerWatch(path, EventType.NodeDataChanged);//通过IWatchManager触发监听
+            return s;
+        }
 
+```
+在服务端Watcher主要包装成网络请求的 NettyServerCnxn 或者 NIOServerCnxn，根据客户端请求的连接包装成其中一个，我们看看NettyServerCnxn中`process`的实现
+```java
+    public void process(WatchedEvent event) {
+        ReplyHeader h = new ReplyHeader(ClientCnxn.NOTIFICATION_XID, -1L, 0);
+        if (LOG.isTraceEnabled()) {
+            ZooTrace.logTraceMessage(
+                LOG,
+                ZooTrace.EVENT_DELIVERY_TRACE_MASK,
+                "Deliver event " + event + " to 0x" + Long.toHexString(this.sessionId) + " through " + this);
+        }
+
+        WatcherEvent e = event.getWrapper();//包装WatcherEvent
+
+        try {
+            sendResponse(h, e, "notification");//发送到客户端
+        } catch (IOException e1) {
+            LOG.debug("Problem sending to {}", getRemoteSocketAddress(), e1);
+            close();
+        }
+    }
+
+    @Override
+    public void sendResponse(ReplyHeader h, Record r, String tag,
+                             String cacheKey, Stat stat, int opCode) throws IOException {
+        if (closingChannel || !channel.isOpen()) {
+            return;
+        }
+        sendBuffer(serialize(h, r, tag, cacheKey, stat, opCode));//发送数据
+        decrOutstandingAndCheckThrottle(h);
+    }
+```
+这样，客户端注册的监听就通过事件发送回客户端进行处理。
 ### 客户端处理回调 Watcher
+Zookeeper 客服端SendThread不仅接受返送请求的返回，同时也是一个ReadThread，接受服务端发送的请求，服务端发送的触发事件也是通过这里传入的
+```java
+class SendThread extends ZooKeeperThread {
+    
+    void readResponse(ByteBuffer incomingBuffer) throws IOException {
+            ByteBufferInputStream bbis = new ByteBufferInputStream(incomingBuffer);
+            BinaryInputArchive bbia = BinaryInputArchive.getArchive(bbis);
+            ReplyHeader replyHdr = new ReplyHeader();
 
+            replyHdr.deserialize(bbia, "header");
+            switch (replyHdr.getXid()) {
+                case NOTIFICATION_XID:
+                    WatcherEvent event = new WatcherEvent();
+                    event.deserialize(bbia, "response");//反序列化请求
+    
+                    // 转化server path 为 client path
+                    if (chrootPath != null) {
+                        String serverPath = event.getPath();
+                        if (serverPath.compareTo(chrootPath) == 0) {
+                            event.setPath("/");
+                        } else if (serverPath.length() > chrootPath.length()) {
+                            event.setPath(serverPath.substring(chrootPath.length()));
+                         } else {
+                             LOG.warn("Got server path {} which is too short for chroot path {}.",
+                                 event.getPath(), chrootPath);
+                         }
+                    }
+                    WatchedEvent we = new WatchedEvent(event);
+                    LOG.debug("Got {} for session id 0x{}", we, Long.toHexString(sessionId));
+                    eventThread.queueEvent(we);//通过EventThread处理WatchedEvent
+                    return;
+                default:
+                    break;
+                }
+        }
+}
+```
+`EventThread` 专门处理事件，将WatchedEvent放入处理队列中，然后统一处理WatchedEvent
 ```java
   class EventThread extends ZooKeeperThread {
-      public void queuePacket(Packet packet) {
-              if (wasKilled) {
-                  synchronized (waitingEvents) {
-                      if (isRunning) {
-                          waitingEvents.add(packet);
-                      } else {
-                          processEvent(packet);
-                      }
-                  }
-              } else {
-                  waitingEvents.add(packet);
-              }
+    public void queueEvent(WatchedEvent event) {//接受请求
+              queueEvent(event, null);
           }
+  
+          private void queueEvent(WatchedEvent event, Set<Watcher> materializedWatchers) {
+              if (event.getType() == EventType.None && sessionState == event.getState()) {
+                  return;
+              }
+              sessionState = event.getState();
+              final Set<Watcher> watchers;
+              if (materializedWatchers == null) {
+                  // materialize 这里取出移并除ZKWatchManager中注册的事件，保证事件只调用一次
+                  watchers = watcher.materialize(event.getState(), event.getType(), event.getPath());
+              } else {
+                  watchers = new HashSet<Watcher>();
+                  watchers.addAll(materializedWatchers);
+              }
+              // event 来生成一个 WatcherSetEventPair 类型的pari，这个pari只是把 event 加了一个壳，然后附加上了这个节点上所有的 Watcher 
+              WatcherSetEventPair pair = new WatcherSetEventPair(watchers, event);
+              // 放入处理等待队列
+              waitingEvents.add(pair);
+          }
+        public void run() {
+                try {
+                    isRunning = true;
+                    while (true) {
+                        Object event = waitingEvents.take();//从等待队列中弹出
+                        if (event == eventOfDeath) {
+                            wasKilled = true;
+                        } else {
+                            processEvent(event);
+                        }
+                        if (wasKilled) {
+                            synchronized (waitingEvents) {
+                                if (waitingEvents.isEmpty()) {
+                                    isRunning = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    LOG.error("Event thread exiting due to interruption", e);
+                }
+    
+         }
+
       private void processEvent(Object event) {
           try {
               if (event instanceof WatcherSetEventPair) {
@@ -723,7 +904,7 @@ watchRegistration.register方法就是把 WatchRegistration 子类里面的 Watc
                   WatcherSetEventPair pair = (WatcherSetEventPair) event;
                   for (Watcher watcher : pair.watchers) {
                       try {
-                          watcher.process(pair.event);
+                          watcher.process(pair.event);//监听执行
                       } catch (Throwable t) {
                           LOG.error("Error while calling watcher.", t);
                       }
@@ -733,3 +914,13 @@ watchRegistration.register方法就是把 WatchRegistration 子类里面的 Watc
       }
   }
 ```
+
+这样整个流程客户端注册-》服务端注册-》服务端触发回调-》客服端处理监听 就结束
+
+下边时注册方式对事件的可监控性
+注册方式| NodeCreated |NodeChildrenChanged|NodeDeleted|NodeDataChanged
+-------- | ----- | ------| ---|----
+getData| 可监控||可监控|可监控
+getChildren|  |可监控|可监控
+exists| 可监控||可监控|可监控
+
