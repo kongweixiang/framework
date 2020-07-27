@@ -593,7 +593,6 @@ public class CommitLog {
 - |  TOPIC BODY | 消息topic的内容
 2 |  PROPERTIES| 消息properties的长度
 - |  PROPERTIES|  消息properties的内容
-4 |  BODY | 消息体的长度
 
 消息格式化的代码实现如下：
 ```java
